@@ -1,10 +1,27 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from typing import Optional
+import secrets
 import pickle
 import pandas as pd
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Inisialisasi FastAPI
-app = FastAPI(title="Product Category Prediction API (GnB + Scaler)")
+app = FastAPI(
+    title="Product Category Prediction API (GnB + Scaler)",
+    description="API untuk prediksi kategori produk dengan autentikasi token",
+    version="1.0.0"
+    )
+
+# Setup security
+security = HTTPBearer()
+
+# Valid tokens from environment
+VALID_TOKENS = set(os.getenv("API_TOKENS", "").split(","))
 
 # Load model dan scaler
 with open("WebMinnersbaru.pkl", "rb") as f:
@@ -23,6 +40,17 @@ class InputData(BaseModel):
     Day: int
     Year: int
 
+# Fungsi verifikasi token
+async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
+    if token not in VALID_TOKENS:
+        raise HTTPException(
+            status_code=403,
+            detail="Invalid authentication token",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+    return token
+    
 # Preprocessing input
 def preprocess_input(data: InputData):
     df = pd.DataFrame([data.dict()])
@@ -35,12 +63,25 @@ def preprocess_input(data: InputData):
 def read_root():
     return {"message": "✅ Product Category Prediction API is running"}
 
-# Endpoint prediksi
+# Endpoint prediksi dengan autentikasi
 @app.post("/predict")
-def predict_category(data: InputData):
-    processed = preprocess_input(data)
-    prediction = model.predict(processed)[0]
-    label_map = {0: "Sedikit", 1: "Sedang", 2: "Banyak"}
-    return {
-        "predicted_category": label_map.get(prediction, "Unknown")
-    }
+def predict_category(
+    data: InputData,
+    token: str = Depends(verify_token)  # Token verification
+):
+    try:
+        processed = preprocess_input(data)
+        prediction = model.predict(processed)[0]
+        label_map = {0: "Sedikit", 1: "Sedang", 2: "Banyak"}
+        
+        return {
+            "status": "success",
+            "predicted_category": label_map.get(prediction, "Unknown"),
+            "model_used": "Gaussian Naive Bayes with Scaler",
+            "token_used": token[-4:]  # Show last 4 chars for verification
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Prediction failed: {str(e)}"
+        )
